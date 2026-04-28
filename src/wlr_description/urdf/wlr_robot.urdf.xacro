@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<robot name="wlr_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find wlr_description)/urdf/materials.xacro"/>
+  <xacro:include filename="$(find wlr_description)/urdf/leg.urdf.xacro"/>
+  <xacro:include filename="$(find wlr_description)/urdf/gazebo.xacro"/>
+
+  <!-- ==================== Body ==================== -->
+  <!-- Body dimensions: 210mm x 155mm x 60mm, mass 2.19kg -->
+
+  <xacro:property name="body_length" value="0.210"/>
+  <xacro:property name="body_width"  value="0.155"/>
+  <xacro:property name="body_height" value="0.060"/>
+  <xacro:property name="body_mass"   value="2.19"/>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${body_mass}"/>
+      <inertia
+        ixx="${body_mass*(body_width*body_width+body_height*body_height)/12}"
+        ixy="0" ixz="0"
+        iyy="${body_mass*(body_length*body_length+body_height*body_height)/12}"
+        iyz="0"
+        izz="${body_mass*(body_length*body_length+body_width*body_width)/12}"/>
+    </inertial>
+  </link>
+
+  <!-- ==================== IMU ==================== -->
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="imu_link">
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
+
+  <!-- ==================== Legs ==================== -->
+
+  <xacro:leg side="left"  y_sign="1"  parent="base_link"/>
+  <xacro:leg side="right" y_sign="-1" parent="base_link"/>
+
+</robot>

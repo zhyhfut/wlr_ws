@@ -1,0 +1,25 @@
+balance_controller:
+  ros__parameters:
+    # Physical parameters
+    wheel_radius: 0.05        # m (adapted for simulation, original 0.038)
+    leg_mass: 0.2423           # kg (sum of thigh + calf per leg)
+    total_mass: 3.524          # kg (body + all links + wheels, from URDF)
+
+    # LQR gain ratios (from balance_task.c)
+    lqr_tp_ratio: 0.4         # leg torque ratio
+    lqr_t_ratio: 0.8          # wheel torque ratio
+    f_ratio: 1.0              # force ratio
+
+    # Default leg length (m) — geometric max ~0.208, natural settle ~0.157
+    default_leg_length: 0.15
+
+    # Leg length PD gains (from leg_control_task.c)
+    leg_length_kp: 100.0
+    leg_length_kd: 300.0
+    max_leg_force: 30.0
+
+    # Joint torque limit (Nm)
+    torque_limit: 5.0
+
+    # Control loop frequency (Hz)
+    control_rate: 500.0

@@ -1,0 +1,20 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 1000
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    effort_controller:
+      type: forward_command_controller/ForwardCommandController
+
+effort_controller:
+  ros__parameters:
+    joints:
+      - left_hip_front_joint
+      - left_hip_rear_joint
+      - left_wheel_joint
+      - right_hip_front_joint
+      - right_hip_rear_joint
+      - right_wheel_joint
+    interface_name: effort
