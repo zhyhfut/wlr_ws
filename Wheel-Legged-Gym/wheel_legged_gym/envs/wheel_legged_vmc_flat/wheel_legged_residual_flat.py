@@ -77,6 +77,13 @@ class LeggedRobotResidual(LeggedRobotVMC):
             self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
         )
 
+        # Override parent's torques buffer: parent uses num_actions (2) but we
+        # need num_dof (6) since _compute_torques outputs per-DOF joint torques.
+        self.torques = torch.zeros(
+            self.num_envs, self.num_dof, dtype=torch.float,
+            device=self.device, requires_grad=False,
+        )
+
     # ------------------------------------------------------------------ #
     #  Reset                                                              #
     # ------------------------------------------------------------------ #
