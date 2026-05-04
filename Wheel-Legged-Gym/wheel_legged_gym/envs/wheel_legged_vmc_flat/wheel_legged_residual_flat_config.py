@@ -32,6 +32,7 @@ class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
     class env(WheelLeggedVMCFlatCfg.env):
         num_observations = 31   # 3+3+3+2+2+2+2+2+2+2+6+2
         num_actions      = 2    # [d_T, d_Tp]
+        num_privileged_obs = None  # disable asymmetric critic
 
     class control(WheelLeggedVMCFlatCfg.control):
         # ---------- LQR ratios ------------------------------------------------
