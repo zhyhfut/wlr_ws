@@ -1,24 +1,23 @@
 """
-Configuration for Wheel-Legged Robot Residual RL (LQR baseline + PPO, flat terrain).
+Configuration for Wheel-Legged Robot Residual RL (VMC PD baseline + PPO, rough terrain).
 
 Architecture:
-    final_torque = VMC_PD(LQR_baseline + residual_scale * RL_residual, L0_PD)
+    final_torque = VMC(PD(theta0_ref + residual_scale * d_theta0, l0_ref + residual_scale * d_l0))
 
-The LQR baseline is a planar controller operating in the virtual-leg domain:
-  - 6-D state  → 2-D output  [T_wheel, Tp_leg]
-  - Gain-scheduled on virtual leg length L0 (cubic polynomials, pre-computed offline)
-  - T_wheel → wheel drive torque (symmetric)
-  - Tp_leg  → leg lean torque for pitch (SYMMETRIC across both legs)
+The PD baseline provides basic stabilization in VMC task space:
+  - theta0_ref = 0 (upright) + RL residual
+  - l0_ref = l0_offset + RL residual
+  - wheel torque from command tracking (no RL residual)
 
-RL outputs 2-D residuals [d_T, d_Tp] in the same virtual-torque space,
-applied symmetrically to both legs. Roll stability comes from the theta0
-PD controller (kp_theta=50).
+RL outputs 4-D residuals [d_theta0_L, d_l0_L, d_theta0_R, d_l0_R]
+applied per-leg to PD targets. Rough terrain requires independent leg control.
 
 Key differences vs standard WheelLeggedVMCFlatCfg:
-  - num_actions      = 2   (RL only outputs [d_T, d_Tp] residual)
-  - num_observations = 31  (includes LQR state & output in obs)
-  - LQR gain scheduling replaces fixed PD targets
-  - Curriculum ramp on residual_scale: 0 (pure LQR) -> 1 (LQR + RL)
+  - num_actions      = 4   (per-leg VMC reference residuals)
+  - num_observations = 102 (includes 77 terrain height points)
+  - Terrain is trimesh with curriculum (NOT flat plane)
+  - PD gains are tuned for baseline stability (kp_theta=150)
+  - Curriculum ramp on residual_scale: 0 (pure PD) -> 1 (PD + RL)
 """
 
 from wheel_legged_gym.envs.wheel_legged_vmc_flat.wheel_legged_vmc_flat_config import (
@@ -30,35 +29,27 @@ from wheel_legged_gym.envs.wheel_legged_vmc_flat.wheel_legged_vmc_flat_config im
 class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
 
     class env(WheelLeggedVMCFlatCfg.env):
-        num_observations = 31   # 3+3+3+2+2+2+2+2+2+2+6+2
-        num_actions      = 2    # [d_T, d_Tp]
+        num_observations = 102  # 25(proprio) + 77(height points)
+        num_actions      = 4    # [d_theta0_L, d_l0_L, d_theta0_R, d_l0_R]
         num_privileged_obs = None  # disable asymmetric critic
 
     class control(WheelLeggedVMCFlatCfg.control):
-        # ---------- LQR ratios ------------------------------------------------
-        # Scale applied to raw LQR output before it enters the VMC pipeline.
-        # Signs follow firmware convention (wheel torque is negated).
-        lqr_t_ratio  = 0.8   # scale on LQR wheel torque
-        lqr_tp_ratio = 0.4   # scale on LQR leg lean torque (symmetric)
-
         # ---------- Residual RL action scaling ---------------------------------
-        # RL residual is interpreted as a virtual torque in [Nm]:
-        #   total = LQR_baseline * ratio + residual_scale * action * scale
-        residual_scale_T  = 2.0   # max extra wheel torque from RL  [Nm]
-        residual_scale_Tp = 1.0   # max extra leg lean torque from RL [Nm]
+        # RL residual shifts the PD target in VMC task space.
+        action_scale_theta = 0.5   # scale on d_theta0 -> theta0_ref shift [rad]
+        action_scale_l0   = 0.1    # scale on d_l0 -> l0_ref shift [m]
 
         # ---------- Residual curriculum ----------------------------------------
-        # Step 0  .. ramp_start  : residual_scale = 0  (pure LQR)
+        # Step 0  .. ramp_start  : residual_scale = 0  (pure PD)
         # Step ramp_start .. ramp_end : linear ramp 0 -> 1
         # Step ramp_end+         : residual_scale = 1
-        residual_ramp_start_steps = 10_000
-        residual_ramp_end_steps   = 80_000
+        residual_ramp_start_steps = 500
+        residual_ramp_end_steps   = 3_000
 
         # ---------- Leg length ------------------------------------------------
         l0_offset         = 0.175   # default target leg length [m]
         l0_min            = 0.10    # lower clamp [m]
         l0_max            = 0.25    # upper clamp [m]
-        feedforward_force = 40.0    # constant gravity-compensation force [N]
 
         # ---------- Yaw -------------------------------------------------------
         yaw_torque_scale = 0.5   # differential wheel torque gain [Nm/(rad/s)]
@@ -70,13 +61,14 @@ class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
 
     class normalization(WheelLeggedVMCFlatCfg.normalization):
         class obs_scales(WheelLeggedVMCFlatCfg.normalization.obs_scales):
-            lqr_state  = 0.2    # LQR state is O(1-5 rad/m)
-            lqr_output = 0.05   # LQR output torques are O(5-20 Nm)
+            height_measurements = 5.0
 
     class rewards(WheelLeggedVMCFlatCfg.rewards):
         class scales(WheelLeggedVMCFlatCfg.rewards.scales):
-            # Encourage small RL residuals (negative = penalty)
-            residual_magnitude_l2 = -0.1
+            # Remove nominal_state — legs need different angles on rough terrain
+            nominal_state = 0.0
+            # Height penalty: robot should maintain target base height
+            base_height = -5.0
 
     class noise(WheelLeggedVMCFlatCfg.noise):
         class noise_scales(WheelLeggedVMCFlatCfg.noise.noise_scales):
@@ -88,11 +80,11 @@ class WheelLeggedResidualFlatCfgPPO(WheelLeggedVMCFlatCfgPPO):
     """PPO training configuration for the residual RL policy."""
 
     class policy(WheelLeggedVMCFlatCfgPPO.policy):
-        # 5 steps x 31-D obs -> encoder input
-        num_encoder_obs = 155   # obs_history_length (5) * num_observations (31)
-        latent_dim       = 3
-        actor_hidden_dims  = [128, 64, 32]
-        critic_hidden_dims = [256, 128, 64]
+        # 5 steps x 102-D obs -> encoder input
+        num_encoder_obs = 510   # obs_history_length (5) * num_observations (102)
+        latent_dim       = 4
+        actor_hidden_dims  = [256, 128, 64]
+        critic_hidden_dims = [512, 256, 128]
         activation = "elu"
 
     class algorithm(WheelLeggedVMCFlatCfgPPO.algorithm):
@@ -100,5 +92,5 @@ class WheelLeggedResidualFlatCfgPPO(WheelLeggedVMCFlatCfgPPO):
 
     class runner(WheelLeggedVMCFlatCfgPPO.runner):
         experiment_name    = "wheel_legged_residual_flat"
-        max_iterations     = 2000
+        max_iterations     = 3000
         policy_class_name  = "ActorCriticSequence"

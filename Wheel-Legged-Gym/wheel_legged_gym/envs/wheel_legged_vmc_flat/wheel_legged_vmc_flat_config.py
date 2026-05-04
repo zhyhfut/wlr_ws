@@ -37,7 +37,13 @@ from wheel_legged_gym.envs.wheel_legged_vmc.wheel_legged_vmc_config import (
 class WheelLeggedVMCFlatCfg(WheelLeggedVMCCfg):
 
     class terrain(WheelLeggedVMCCfg.terrain):
-        mesh_type = "plane"
+        mesh_type = "trimesh"
+        curriculum = True
+        measure_heights = True
+        max_init_terrain_level = 2
+        num_rows = 10
+        num_cols = 4
+        terrain_proportions = [0.4, 0.3, 0.2, 0.1]  # flat, smooth slope, rough slope, obstacles
 
 
 class WheelLeggedVMCFlatCfgPPO(WheelLeggedVMCCfgPPO):

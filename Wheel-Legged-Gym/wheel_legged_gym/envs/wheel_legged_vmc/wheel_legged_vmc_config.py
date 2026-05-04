@@ -46,12 +46,12 @@ class WheelLeggedVMCCfg(WheelLeggedCfg):
         action_scale_vel = 10.0
 
         l0_offset = 0.175
-        feedforward_force = 40.0  # [N]
+        feedforward_force = 45.0  # [N]
 
-        kp_theta = 50.0  # [N*m/rad]
-        kd_theta = 3.0  # [N*m*s/rad]
-        kp_l0 = 900.0  # [N/m]
-        kd_l0 = 20.0  # [N*s/m]
+        kp_theta = 150.0  # [N*m/rad]
+        kd_theta = 6.0  # [N*m*s/rad]
+        kp_l0 = 1200.0  # [N/m]
+        kd_l0 = 30.0  # [N*s/m]
 
         # PD Drive parameters:
         stiffness = {"f0": 0.0, "f1": 0.0, "wheel": 0}  # [N*m/rad]

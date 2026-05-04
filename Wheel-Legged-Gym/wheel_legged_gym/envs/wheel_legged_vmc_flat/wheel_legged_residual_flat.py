@@ -1,24 +1,23 @@
 """
-Residual RL environment for the Wheel-Legged Robot (flat terrain).
+Residual RL environment for the Wheel-Legged Robot (rough terrain).
 
 Architecture:
-    final_torque = VMC(LQR_baseline + residual_scale * RL_residual, L0_PD)
+    final_torque = VMC(PD(theta0_ref_residual, l0_ref_residual), feedforward_force)
 
-The LQR baseline operates in the planar virtual-leg domain:
-  - 6-D state [theta, dTheta, x_err, dx_err, phi, dPhi]
-  - 2-D output [T_wheel, Tp_leg] (virtual torques)
-  - Gains scheduled on L0 (12 cubic polynomials)
+The PD baseline provides basic stabilization:
+  - theta0_ref = 0 + residual_scale * d_theta0   (upright + RL adjustment)
+  - l0_ref     = l0_offset + residual_scale * d_l0  (nominal height + RL adjustment)
+  - wheel torque from command speed tracking (no RL residual on wheels)
 
-The RL policy outputs 2-D actions [d_T, d_Tp] as residuals in the same
-virtual-torque space. Both LQR and RL contributions are applied
-SYMMETRICALLY to both legs (pitch axis only; roll is handled by theta0 PD).
+RL outputs 4-D actions [d_theta0_L, d_l0_L, d_theta0_R, d_l0_R] as per-leg
+adjustments to the PD targets in VMC task space.
 
 Curriculum for residual_scale:
-    steps 0  -- ramp_start        : scale = 0  (pure LQR)
-    steps ramp_start -- ramp_end  : scale 0 -> 1
+    steps 0  -- ramp_start        : scale = 0  (pure PD)
+    steps ramp_start -- ramp_end : scale 0 -> 1
     steps ramp_end+               : scale = 1
 
-Observation space (31-D):
+Observation space (102-D):
     [0 :3 ]  base_ang_vel  * ang_vel_scale
     [3 :6 ]  projected_gravity
     [6 :9 ]  commands[:, :3] * commands_scale
@@ -28,9 +27,8 @@ Observation space (31-D):
     [15:17]  L0_dot * l0_dot_scale
     [17:19]  dof_pos[:, [2,5]] * dof_pos_scale   (wheel positions)
     [19:21]  dof_vel[:, [2,5]] * dof_vel_scale   (wheel velocities)
-    [21:23]  actions                               (previous 2-D residual)
-    [23:29]  lqr_state * lqr_state_scale          (6-D LQR state)
-    [29:31]  lqr_output * lqr_output_scale        (2-D LQR output)
+    [21:25]  actions                               (previous 4-D residual)
+    [25:102] relative_heights * height_measurements_scale  (77 terrain height points)
 """
 
 import math
@@ -40,11 +38,10 @@ from torch import Tensor
 
 from wheel_legged_gym.envs.wheel_legged_vmc.wheel_legged_vmc import LeggedRobotVMC
 from .wheel_legged_residual_flat_config import WheelLeggedResidualFlatCfg
-from .lqr_gpu import compute_lqr_output, WHEEL_R
 
 
 class LeggedRobotResidual(LeggedRobotVMC):
-    """Extends LeggedRobotVMC: gain-scheduled LQR baseline + 2-D RL residual."""
+    """Extends LeggedRobotVMC: PD baseline + 4-D RL residual for rough terrain."""
 
     def __init__(
         self,
@@ -64,29 +61,13 @@ class LeggedRobotResidual(LeggedRobotVMC):
     def _init_buffers(self):
         super()._init_buffers()
 
-        # LQR buffers (written in _compute_torques, read in compute_observations)
-        self.lqr_state = torch.zeros(
-            self.num_envs, 6, dtype=torch.float, device=self.device,
-            requires_grad=False,
-        )
-        self.lqr_output = torch.zeros(
-            self.num_envs, 2, dtype=torch.float, device=self.device,
-            requires_grad=False,
-        )
-
-        # Per-env wheel reference: reset to current position each episode
-        self.wheel_pos_ref = torch.zeros(
-            self.num_envs, dtype=torch.float, device=self.device,
-            requires_grad=False,
-        )
-
         # Curriculum scale for RL residual (0 -> 1 over training)
         self.residual_scale = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device,
             requires_grad=False,
         )
 
-        # Override torques buffer: parent uses num_actions (2) but we need
+        # Override torques buffer: parent uses num_actions (4) but we need
         # num_dof (6) since _compute_torques outputs per-DOF joint torques.
         self.torques = torch.zeros(
             self.num_envs, self.num_dof, dtype=torch.float,
@@ -99,11 +80,6 @@ class LeggedRobotResidual(LeggedRobotVMC):
 
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
-        # Set wheel position reference to current position so x_err = 0
-        avg_wp = (self.dof_pos[env_ids, 2] + self.dof_pos[env_ids, 5]) * 0.5
-        self.wheel_pos_ref[env_ids] = avg_wp
-        self.lqr_state[env_ids] = 0.0
-        self.lqr_output[env_ids] = 0.0
 
     # ------------------------------------------------------------------ #
     #  Residual-scale curriculum                                          #
@@ -133,102 +109,81 @@ class LeggedRobotResidual(LeggedRobotVMC):
         return super().step(actions)
 
     # ------------------------------------------------------------------ #
-    #  Torque computation (LQR baseline + RL residual -> VMC)             #
+    #  Torque computation (PD baseline with RL residual on VMC refs)     #
     # ------------------------------------------------------------------ #
 
     def _compute_torques(self, actions: Tensor) -> Tensor:
         """
-        Compute joint torques: LQR baseline + residual_scale * RL residual.
+        Compute joint torques: PD baseline with RL residual shifting VMC targets.
 
         Args:
-            actions: (num_envs, 2) = [d_T, d_Tp]  clipped residual in virtual torque space
+            actions: (num_envs, 4) = [d_theta0_L, d_l0_L, d_theta0_R, d_l0_R]
 
         Returns:
             torques: (num_envs, 6) = [lf0, lf1, l_wheel, rf0, rf1, r_wheel]
         """
         cfg = self.cfg.control
+        rs = self.residual_scale  # (num_envs,)
 
-        # ---- RL residual (scaled to Nm) -------------------------------------
-        d_T  = actions[:, 0] * cfg.residual_scale_T   # extra wheel torque [Nm]
-        d_Tp = actions[:, 1] * cfg.residual_scale_Tp  # extra leg torque [Nm]
-
-        # ---- Update wheel position reference while moving --------------------
-        target_speed = self.commands[:, 0]
-        avg_wheel_pos = (self.dof_pos[:, 2] + self.dof_pos[:, 5]) * 0.5
-        moving = torch.abs(target_speed) > 0.05
-        self.wheel_pos_ref = torch.where(moving, avg_wheel_pos, self.wheel_pos_ref)
-
-        # ---- LQR baseline ---------------------------------------------------
-        lqr_state, _avg_L0, lqr_out = compute_lqr_output(
-            theta0=self.theta0,
-            theta0_dot=self.theta0_dot,
-            L0=self.L0,
-            L0_dot=self.L0_dot,
-            dof_pos_wheel=self.dof_pos[:, [2, 5]],
-            dof_vel_wheel=self.dof_vel[:, [2, 5]],
-            projected_gravity=self.projected_gravity,
-            base_ang_vel=self.base_ang_vel,
-            target_speed=target_speed,
-            wheel_pos_ref=self.wheel_pos_ref,
-        )
-        self.lqr_state[:] = lqr_state
-        self.lqr_output[:] = lqr_out
-
-        lqr_T  = lqr_out[:, 0]   # raw LQR wheel torque
-        lqr_Tp = lqr_out[:, 1]   # raw LQR leg lean torque
-
-        # ---- Combine LQR + RL (virtual torques) -----------------------------
-        rs = self.residual_scale
-
-        # Wheel torque: firmware convention requires negation on LQR term
-        wheel_T = -lqr_T * cfg.lqr_t_ratio + rs * d_T
-
-        # Leg lean torque: SYMMETRIC (same sign for both legs).
-        # This is CORRECT for pitch-axis control.  The previous version
-        # applied this antisymmetrically (roll), which was the root bug.
-        # Roll stability comes from the theta0 PD controller below.
-        pitch_Tp = lqr_Tp * cfg.lqr_tp_ratio + rs * d_Tp
-
-        # ---- Leg length PD ------------------------------------------------
-        l0_target = torch.clamp(
-            self.commands[:, 2], cfg.l0_min, cfg.l0_max
-        )
-        F_L = (
-            self.l0_kp[:, 0] * (l0_target - self.L0[:, 0])
-            - self.l0_kd[:, 0] * self.L0_dot[:, 0]
-            + cfg.feedforward_force
-        )
-        F_R = (
-            self.l0_kp[:, 1] * (l0_target - self.L0[:, 1])
-            - self.l0_kd[:, 1] * self.L0_dot[:, 1]
-            + cfg.feedforward_force
+        # ---- Build VMC references from RL residuals --------------------------
+        # theta0_ref: baseline is 0 (stand upright), RL adds per-leg shift
+        # (num_envs, 2)  [left, right]
+        theta0_ref = torch.stack(
+            [
+                rs * actions[:, 0] * cfg.action_scale_theta,   # left leg
+                rs * actions[:, 2] * cfg.action_scale_theta,   # right leg
+            ],
+            dim=-1,
         )
 
-        # ---- VMC: (F, Tp) -> joint torques, per leg -----------------------
-        # Theta0 PD is ADDED to LQR: theta0_ref=0 means stand upright.
-        # This PD provides roll stability and supplements pitch control.
-        torque_leg_L = (
-            self.theta_kp[:, 0] * (-self.theta0[:, 0])   # theta0_ref = 0
-            - self.theta_kd[:, 0] * self.theta0_dot[:, 0]
-            + pitch_Tp                                    # LQR + RL contribution
-        )
-        torque_leg_R = (
-            self.theta_kp[:, 1] * (-self.theta0[:, 1])   # theta0_ref = 0
-            - self.theta_kd[:, 1] * self.theta0_dot[:, 1]
-            + pitch_Tp                                    # SAME sign (symmetric)
+        # l0_ref: baseline is l0_offset, RL adds per-leg shift
+        l0_ref = torch.stack(
+            [
+                cfg.l0_offset + rs * actions[:, 1] * cfg.action_scale_l0,  # left
+                cfg.l0_offset + rs * actions[:, 3] * cfg.action_scale_l0,  # right
+            ],
+            dim=-1,
         )
 
-        T1_L, T2_L = self._vmc_single(F_L, torque_leg_L, side=0)
-        T1_R, T2_R = self._vmc_single(F_R, torque_leg_R, side=1)
+        # ---- PD control in VMC task space ------------------------------------
+        # Leg torque (tangential to L0): PD on theta0
+        torque_leg = (
+            self.theta_kp * (theta0_ref - self.theta0)
+            - self.theta_kd * self.theta0_dot
+        )  # (num_envs, 2)
 
-        # ---- Yaw: differential wheel torque --------------------------------
-        yaw_T = self.commands[:, 1] * cfg.yaw_torque_scale
+        # Leg force (radial along L0): PD on L0
+        force_leg = (
+            self.l0_kp * (l0_ref - self.L0)
+            - self.l0_kd * self.L0_dot
+        )  # (num_envs, 2)
 
-        # ---- Assemble ------------------------------------------------------
+        # ---- Wheel torque: track command speed (no RL residual) --------------
+        target_speed = self.commands[:, 0]  # (num_envs,)
+        yaw_command  = self.commands[:, 1]  # (num_envs,)
+
+        wheel_vel_target = torch.stack(
+            [
+                target_speed + yaw_command,   # left wheel
+                target_speed - yaw_command,   # right wheel
+            ],
+            dim=-1,
+        )  # (num_envs, 2)
+
+        torque_wheel = self.d_gains[:, [2, 5]] * (
+            wheel_vel_target - self.dof_vel[:, [2, 5]]
+        )  # (num_envs, 2)
+
+        # ---- VMC Jacobian transpose: (F, Tp) -> (T1, T2) --------------------
+        T1, T2 = self.VMC(
+            force_leg + cfg.feedforward_force, torque_leg,
+        )  # each (num_envs, 2)
+
+        # ---- Assemble --------------------------------------------------------
         torques = torch.stack(
             [
-                T1_L, T2_L, wheel_T + yaw_T,
-                -T1_R, -T2_R, wheel_T - yaw_T,
+                T1[:, 0], T2[:, 0], torque_wheel[:, 0],   # left:  f0, f1, wheel
+                -T1[:, 1], -T2[:, 1], torque_wheel[:, 1], # right: f0, f1, wheel (negated)
             ],
             dim=-1,
         )
@@ -236,53 +191,20 @@ class LeggedRobotResidual(LeggedRobotVMC):
             torques * self.torques_scale, -self.torque_limits, self.torque_limits
         )
 
-    def _vmc_single(self, F: Tensor, Tp: Tensor, side: int):
-        """
-        VMC Jacobian transpose for one leg.
-
-        Identical formula to LeggedRobotVMC.VMC() but per-leg so left/right
-        can receive different axial forces (F) while sharing the same
-        symmetric pitch torque (Tp = pitch_Tp).
-
-        Returns:
-            T1, T2: (N,) joint torques for hip joint 0 and hip joint 1
-        """
-        l1 = self.cfg.asset.l1
-        l2 = self.cfg.asset.l2
-
-        theta0 = self.theta0[:, side] + math.pi / 2.0
-        theta1 = self.theta1[:, side]
-        theta2 = self.theta2[:, side]
-        L0     = self.L0[:, side]
-
-        t11 = (l1 * torch.sin(theta0 - theta1)
-               - l2 * torch.sin(theta1 + theta2 - theta0))
-        t12 = ((l1 * torch.cos(theta0 - theta1)
-                - l2 * torch.cos(theta1 + theta2 - theta0))
-               / (L0 + 1e-6))
-        t21 = -l2 * torch.sin(theta1 + theta2 - theta0)
-        t22 = (-l2 * torch.cos(theta1 + theta2 - theta0)
-               / (L0 + 1e-6))
-
-        T1 = t11 * F - t12 * Tp
-        T2 = t21 * F - t22 * Tp
-        return T1, T2
-
     # ------------------------------------------------------------------ #
     #  Observations                                                       #
     # ------------------------------------------------------------------ #
 
     def compute_proprioception_observations(self) -> Tensor:
         """
-        31-D proprioceptive observation for residual RL.
+        102-D proprioceptive observation for residual RL on rough terrain.
 
-        Compared to the standard VMC 27-D obs:
-          - actions replaced with 2-D residual (saves 4 dims)
-          - appended: 6-D lqr_state + 2-D lqr_output (adds 8 dims)
-          net: 27 - 6 + 2 + 8 = 31
+        Base VMC observation (25-D) + 77 terrain height points.
         """
         obs_scales = self.cfg.normalization.obs_scales
-        obs = torch.cat(
+
+        # Base proprioception (same as parent VMC, 25-D with 4-D actions)
+        proprio = torch.cat(
             [
                 self.base_ang_vel * obs_scales.ang_vel,              # [0:3]
                 self.projected_gravity,                               # [3:6]
@@ -293,18 +215,29 @@ class LeggedRobotResidual(LeggedRobotVMC):
                 self.L0_dot * obs_scales.l0_dot,                     # [15:17]
                 self.dof_pos[:, [2, 5]] * obs_scales.dof_pos,        # [17:19]
                 self.dof_vel[:, [2, 5]] * obs_scales.dof_vel,        # [19:21]
-                self.actions,                                          # [21:23]
-                self.lqr_state * obs_scales.lqr_state,               # [23:29]
-                self.lqr_output * obs_scales.lqr_output,             # [29:31]
+                self.actions,                                          # [21:25]
             ],
             dim=-1,
         )
+
+        # Terrain height samples under and around the robot
+        if self.cfg.terrain.measure_heights:
+            # Relative height: how far below (or above) the base is the ground
+            rel_heights = (
+                self.root_states[:, 2].unsqueeze(1) - self.measured_heights
+            ).clamp(-0.2, 0.2) * obs_scales.height_measurements
+            obs = torch.cat([proprio, rel_heights], dim=-1)
+        else:
+            obs = proprio
+
         return obs
 
     def _get_noise_scale_vec(self, cfg):
-        """Noise scale vector aligned with the 31-D observation."""
+        """Noise scale vector aligned with the 102-D observation."""
         self.add_noise = self.cfg.noise.add_noise
-        noise_vec = torch.zeros(31, device=self.device, dtype=torch.float)
+        noise_vec = torch.zeros(
+            self.cfg.env.num_observations, device=self.device, dtype=torch.float,
+        )
         ns  = cfg.noise.noise_scales
         nl  = cfg.noise.noise_level
         obs = cfg.normalization.obs_scales
@@ -318,20 +251,6 @@ class LeggedRobotResidual(LeggedRobotVMC):
         noise_vec[15:17] = ns.l0_dot    * nl * obs.l0_dot         # L0_dot
         noise_vec[17:19] = ns.dof_pos   * nl * obs.dof_pos        # wheel pos
         noise_vec[19:21] = ns.dof_vel   * nl * obs.dof_vel        # wheel vel
-        noise_vec[21:23] = 0.0                                    # prev actions
-        noise_vec[23:29] = 0.0                                    # lqr_state (computed)
-        noise_vec[29:31] = 0.0                                    # lqr_output
+        noise_vec[21:25] = 0.0                                    # prev actions
+        noise_vec[25:102] = ns.height_measurements * nl * obs.height_measurements
         return noise_vec
-
-    # ------------------------------------------------------------------ #
-    #  Reward                                                             #
-    # ------------------------------------------------------------------ #
-
-    def _reward_residual_magnitude_l2(self) -> Tensor:
-        """
-        Penalise large RL residuals.
-
-        Returns (num_envs,) positive scalar; config sets scale = -0.1
-        so the effective reward contribution is negative.
-        """
-        return torch.sum(self.actions ** 2, dim=-1)
