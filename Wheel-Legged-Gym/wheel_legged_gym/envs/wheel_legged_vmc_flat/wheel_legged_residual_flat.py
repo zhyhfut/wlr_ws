@@ -280,6 +280,7 @@ class LeggedRobotResidual(LeggedRobotVMC):
 
     def _get_noise_scale_vec(self, cfg):
         """Noise scale vector aligned with the 31-D observation."""
+        self.add_noise = self.cfg.noise.add_noise
         noise_vec = torch.zeros(31, device=self.device, dtype=torch.float)
         ns  = cfg.noise.noise_scales
         nl  = cfg.noise.noise_level

@@ -76,6 +76,8 @@ class WheelLeggedResidualFlatCfgPPO(WheelLeggedVMCFlatCfgPPO):
 
     class policy(WheelLeggedVMCFlatCfgPPO.policy):
         # Sequence encoder: 5 steps x 31-D obs -> 3-D latent
+        num_encoder_obs = 155    # obs_history_length (5) x num_observations (31)
+        latent_dim       = 3
         actor_hidden_dims  = [128, 64, 32]
         critic_hidden_dims = [256, 128, 64]
         activation = "elu"
