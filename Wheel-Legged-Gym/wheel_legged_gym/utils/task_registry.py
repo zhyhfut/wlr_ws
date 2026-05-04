@@ -82,7 +82,14 @@ class TaskRegistry:
         return env_cfg, train_cfg
 
     def save_cfgs(self, name) -> Tuple[LeggedRobotCfg, LeggedRobotCfgPPO]:
-        os.mkdir(self.log_dir)
+        os.makedirs(self.log_dir, exist_ok=True)
+
+        # Derive config source path from the registered config class's module
+        # (handles cases where config file isn't at envs/{name}/{name}_config.py)
+        env_cfg = self.env_cfgs[name]
+        cfg_module = type(env_cfg).__module__
+        cfg_rel = cfg_module.replace(".", "/") + ".py"
+        cfg_source = os.path.join(WHEEL_LEGGED_GYM_ROOT_DIR, cfg_rel)
 
         save_items = [
             os.path.join(
@@ -93,22 +100,18 @@ class TaskRegistry:
                 self.log_dir,
                 WHEEL_LEGGED_GYM_ENVS_DIR + "/base/legged_robot_config.py",
             ),
-            os.path.join(
-                self.log_dir,
-                WHEEL_LEGGED_GYM_ENVS_DIR
-                + "/{}/".format(name)
-                + "{}_config.py".format(name),
-            ),
+            os.path.join(self.log_dir, cfg_source),
         ]
-        py_root = os.path.join(
-            WHEEL_LEGGED_GYM_ENVS_DIR + "/{}/".format(name) + "{}.py".format(name),
-        )
-        if os.path.exists(py_root):
-            save_items.append(os.path.join(self.log_dir, py_root))
-        if save_items is not None:
-            for save_item in save_items:
-                base_file_name = ntpath.basename(save_item)
-                copyfile(save_item, self.log_dir + "/" + base_file_name)
+
+        # Try to also save the main task .py file (if it exists)
+        py_rel = cfg_rel.replace("_config", "")
+        py_source = os.path.join(WHEEL_LEGGED_GYM_ROOT_DIR, py_rel)
+        if os.path.exists(py_source):
+            save_items.append(os.path.join(self.log_dir, py_source))
+
+        for save_item in save_items:
+            base_file_name = ntpath.basename(save_item)
+            copyfile(save_item, self.log_dir + "/" + base_file_name)
 
     def make_env(self, name, args=None, env_cfg=None) -> Tuple[VecEnv, LeggedRobotCfg]:
         """Creates an environment either from a registered namme or from the provided config file.
