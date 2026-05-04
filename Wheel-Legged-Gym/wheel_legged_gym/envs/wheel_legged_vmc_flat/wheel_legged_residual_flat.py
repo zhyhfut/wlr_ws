@@ -4,14 +4,14 @@ Residual RL environment for the Wheel-Legged Robot (flat terrain).
 Architecture:
     final_torque = LQR_baseline + residual_scale * RL_residual
 
-The RL policy outputs 2-D actions  [d_T, d_Tp]:
+The RL policy outputs 2-D actions [d_T, d_Tp]:
     d_T  : residual added to wheel torque  (symmetric, both wheels)
     d_Tp : residual added to leg lean torque (anti-symmetric: +left, -right)
 
 Curriculum for residual_scale:
-    steps  0 – ramp_start : scale = 0   (pure LQR — robot learns to stand)
-    steps  ramp_start – ramp_end : scale 0 → 1  (RL gradually takes over)
-    steps  ramp_end+  : scale = 1
+    steps 0 -- ramp_start        : scale = 0   (pure LQR, robot learns to stand)
+    steps ramp_start -- ramp_end : scale 0 -> 1 (RL gradually takes over)
+    steps ramp_end+              : scale = 1
 
 Observation space (31-D):
     [0 :3 ]  base_ang_vel  * ang_vel_scale
@@ -29,7 +29,6 @@ Observation space (31-D):
 """
 
 import math
-from typing import Tuple
 
 import torch
 from torch import Tensor
@@ -40,10 +39,7 @@ from .lqr_gpu import compute_lqr_output
 
 
 class LeggedRobotResidual(LeggedRobotVMC):
-    """
-    Extends LeggedRobotVMC with gain-scheduled LQR baseline +
-    2-D RL residual action.
-    """
+    """Extends LeggedRobotVMC with gain-scheduled LQR baseline + 2-D RL residual."""
 
     def __init__(
         self,
@@ -76,7 +72,7 @@ class LeggedRobotResidual(LeggedRobotVMC):
             self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
         )
 
-        # Curriculum scale for RL residual (0 → 1 over training)
+        # Curriculum scale for RL residual (0 -> 1 over training)
         self.residual_scale = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
         )
@@ -113,7 +109,7 @@ class LeggedRobotResidual(LeggedRobotVMC):
         self.residual_scale.fill_(scale)
 
     # ------------------------------------------------------------------ #
-    #  Step override — update curriculum before physics                   #
+    #  Step override -- update curriculum before physics                  #
     # ------------------------------------------------------------------ #
 
     def step(self, actions):
@@ -134,20 +130,19 @@ class LeggedRobotResidual(LeggedRobotVMC):
         Returns:
             torques: (num_envs, 6) = [lf0, lf1, l_wheel, rf0, rf1, r_wheel]
         """
-        # ---- RL residual (scaled) ----------------------------------------
+        # ---- RL residual (scaled) --------------------------------------------
         d_T  = actions[:, 0] * self.cfg.control.residual_scale_T
         d_Tp = actions[:, 1] * self.cfg.control.residual_scale_Tp
 
-        # ---- Wheel position reference update --------------------------------
+        # ---- Wheel position reference update ---------------------------------
         # When moving: track wheel position (stop position error from growing)
-        # When stopped: let position error build (holds position)
-        target_speed  = self.commands[:, 0]
+        target_speed = self.commands[:, 0]
         avg_wheel_pos = (self.dof_pos[:, 2] + self.dof_pos[:, 5]) * 0.5
-        moving        = torch.abs(target_speed) > 0.05
+        moving = torch.abs(target_speed) > 0.05
         self.wheel_pos_ref = torch.where(moving, avg_wheel_pos, self.wheel_pos_ref)
 
-        # ---- LQR baseline ---------------------------------------------------
-        lqr_state, avg_L0, lqr_out = compute_lqr_output(
+        # ---- LQR baseline ----------------------------------------------------
+        lqr_state, _avg_L0, lqr_out = compute_lqr_output(
             theta0=self.theta0,
             theta0_dot=self.theta0_dot,
             L0=self.L0,
@@ -159,7 +154,6 @@ class LeggedRobotResidual(LeggedRobotVMC):
             target_speed=target_speed,
             wheel_pos_ref=self.wheel_pos_ref,
         )
-        # Store for use in observations (called after this in post_physics_step)
         self.lqr_state[:] = lqr_state
         self.lqr_output[:] = lqr_out
 
@@ -167,17 +161,16 @@ class LeggedRobotResidual(LeggedRobotVMC):
         lqr_Tp = lqr_out[:, 1]   # raw LQR leg lean torque
 
         # ---- Final wheel and leg lean torques --------------------------------
-        # Firmware convention: wheel_T = -lqr_T * t_ratio (sign from firmware)
+        # Firmware convention: wheel_T = -lqr_T * t_ratio
         wheel_T = -lqr_T * self.cfg.control.lqr_t_ratio + self.residual_scale * d_T
 
         # Left leg: +Tp, right leg: -Tp  (lean torque is antisymmetric)
-        leg_Tp_L = ( lqr_Tp * self.cfg.control.lqr_tp_ratio
+        leg_Tp_L = (lqr_Tp * self.cfg.control.lqr_tp_ratio
                     + self.residual_scale * d_Tp)
         leg_Tp_R = (-lqr_Tp * self.cfg.control.lqr_tp_ratio
                     - self.residual_scale * d_Tp)
 
-        # ---- Leg length PD → virtual axial force ----------------------------
-        # Target leg length from height command (clamped to safe range)
+        # ---- Leg length PD -> virtual axial force ----------------------------
         l0_target = torch.clamp(
             self.commands[:, 2],
             self.cfg.control.l0_min,
@@ -194,41 +187,35 @@ class LeggedRobotResidual(LeggedRobotVMC):
             + self.cfg.control.feedforward_force
         )
 
-        # ---- VMC Jacobian transpose: (F, Tp) → (T1, T2) --------------------
+        # ---- VMC Jacobian transpose: (F, Tp) -> (T1, T2) --------------------
         T1_L, T2_L = self._vmc_single(F_L, leg_Tp_L, side=0)
         T1_R, T2_R = self._vmc_single(F_R, leg_Tp_R, side=1)
 
-        # ---- Yaw: differential wheel torque ---------------------------------
+        # ---- Yaw: differential wheel torque ----------------------------------
         yaw_T = self.commands[:, 1] * self.cfg.control.yaw_torque_scale
 
-        # ---- Assemble joint torques -----------------------------------------
+        # ---- Assemble joint torques ------------------------------------------
         # Order: [lf0, lf1, l_wheel, rf0, rf1, r_wheel]
-        # Right leg joints are negated (mirror convention from clearlab VMC)
         torques = torch.stack(
-            [T1_L, T2_L, wheel_T + yaw_T,
-             -T1_R, -T2_R, wheel_T - yaw_T],
+            [
+                T1_L, T2_L, wheel_T + yaw_T,
+                -T1_R, -T2_R, wheel_T - yaw_T,
+            ],
             dim=-1,
         )
         return torch.clip(
             torques * self.torques_scale, -self.torque_limits, self.torque_limits
         )
 
-    def _vmc_single(
-        self, F: Tensor, Tp: Tensor, side: int
-    ) -> Tuple[Tensor, Tensor]:
+    def _vmc_single(self, F: Tensor, Tp: Tensor, side: int):
         """
-        VMC Jacobian transpose for one leg (serial-chain clearlab model).
+        VMC Jacobian transpose for one leg.
 
-        Identical to LeggedRobotVMC.VMC() but operates on a single leg
-        to allow different Tp values for left/right.
-
-        Args:
-            F:    virtual axial force (N,)  [N]
-            Tp:   virtual leg lean torque (N,) [Nm]
-            side: 0 = left, 1 = right
+        Identical formula to LeggedRobotVMC.VMC() but per-leg so left/right
+        can have different Tp values.
 
         Returns:
-            T1, T2: joint torques for hip joint 0 and hip joint 1 (N,) [Nm]
+            T1, T2: (N,) joint torques for hip joint 0 and hip joint 1
         """
         l1 = self.cfg.asset.l1
         l2 = self.cfg.asset.l2
@@ -238,7 +225,6 @@ class LeggedRobotResidual(LeggedRobotVMC):
         theta2 = self.theta2[:, side]
         L0     = self.L0[:, side]
 
-        # Jacobian elements (same formula as clearlab VMC)
         t11 = (l1 * torch.sin(theta0 - theta1)
                - l2 * torch.sin(theta1 + theta2 - theta0))
         t12 = ((l1 * torch.cos(theta0 - theta1)
@@ -302,7 +288,7 @@ class LeggedRobotResidual(LeggedRobotVMC):
         noise_vec[17:19] = ns.dof_pos   * nl * obs.dof_pos       # wheel pos
         noise_vec[19:21] = ns.dof_vel   * nl * obs.dof_vel       # wheel vel
         noise_vec[21:23] = 0.0                                   # prev actions
-        noise_vec[23:29] = 0.0                                   # lqr_state (derived, no direct noise)
+        noise_vec[23:29] = 0.0                                   # lqr_state (derived)
         noise_vec[29:31] = 0.0                                   # lqr_output
         return noise_vec
 
@@ -314,11 +300,7 @@ class LeggedRobotResidual(LeggedRobotVMC):
         """
         Penalise large RL residuals.
 
-        Encourages the policy to use LQR as much as possible, only
-        adding residual where genuinely needed.  Scale set to -0.1
-        in config (negative = penalty).
-
-        Returns:
-            (num_envs,) un-scaled reward value  (base class applies scale)
+        Returns (num_envs,) positive scalar; scale is set to -0.1 in config
+        so the effective reward is negative.
         """
         return torch.sum(self.actions ** 2, dim=-1)

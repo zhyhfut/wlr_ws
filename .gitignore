@@ -6,9 +6,6 @@ log/
 # IDE
 .claude/
 
-# Cloned external repos
-Wheel-Legged-Gym/
-
 # Logs
 MUJOCO_LOG.TXT
 *.log

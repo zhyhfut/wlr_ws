@@ -180,62 +180,29 @@ ros2 launch wlr_mujoco sim_visual.launch.py
 #### 环境准备
 
 ```bash
-# 前置条件
+# 前置条件（需提前安装，不包含在本仓库中）
 # 1. NVIDIA GPU (RTX 2070+)
-# 2. 安装 Isaac Gym Preview 4（从 https://developer.nvidia.com/isaac-gym 下载）
-#    下载后进入 isaacgym/python 目录，执行：
-#    pip install -e .
-# 3. 已安装 CUDA 版 PyTorch（参照 https://pytorch.org）
+# 2. Isaac Gym Preview 4：从 https://developer.nvidia.com/isaac-gym 下载
+#    进入 isaacgym/python 目录，执行 pip install -e .
+# 3. CUDA 版 PyTorch：https://pytorch.org
 
-# 验证 Isaac Gym 可导入
+# 验证
 python -c "import isaacgym; print('Isaac Gym OK')"
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ```
 
-#### 克隆上游仓库并安装
+#### 安装并训练
 
 ```bash
-# 进入本仓库根目录
-cd wlr_ws
+# 本仓库的 Wheel-Legged-Gym/ 已经是完整的可运行代码，无需额外克隆上游仓库
 
-# 克隆 Wheel-Legged-Gym 上游仓库（clearlab-sustech 原版）
-git clone https://github.com/clearlab-sustech/Wheel-Legged-Gym.git
-
-# 进入上游仓库目录
-cd Wheel-Legged-Gym
-
-# 安装基础环境
-pip install -e .
-```
-
-#### 应用本项目残差 RL 代码
-
-```bash
-# 本项目提供了 4 个自定义文件，覆盖上游仓库的对应位置：
-#   wheel_legged_gym/envs/__init__.py
-#   wheel_legged_gym/envs/wheel_legged_vmc_flat/__init__.py
-#   wheel_legged_gym/envs/wheel_legged_vmc_flat/lqr_gpu.py
-#   wheel_legged_gym/envs/wheel_legged_vmc_flat/wheel_legged_residual_flat.py
-#   wheel_legged_gym/envs/wheel_legged_vmc_flat/wheel_legged_residual_flat_config.py
-
-# 用本项目 Python 代码覆盖上游仓库
-cp ../Wheel-Legged-Gym/wheel_legged_gym/envs/__init__.py wheel_legged_gym/envs/__init__.py
-cp ../Wheel-Legged-Gym/wheel_legged_gym/envs/wheel_legged_vmc_flat/__init__.py wheel_legged_gym/envs/wheel_legged_vmc_flat/__init__.py
-cp ../Wheel-Legged-Gym/wheel_legged_gym/envs/wheel_legged_vmc_flat/lqr_gpu.py wheel_legged_gym/envs/wheel_legged_vmc_flat/lqr_gpu.py
-cp ../Wheel-Legged-Gym/wheel_legged_gym/envs/wheel_legged_vmc_flat/wheel_legged_residual_flat.py wheel_legged_gym/envs/wheel_legged_vmc_flat/wheel_legged_residual_flat.py
-cp ../Wheel-Legged-Gym/wheel_legged_gym/envs/wheel_legged_vmc_flat/wheel_legged_residual_flat_config.py wheel_legged_gym/envs/wheel_legged_vmc_flat/wheel_legged_residual_flat_config.py
-```
-
-> **说明**：本仓库根目录下的 `Wheel-Legged-Gym/` 中**只包含本项目自定义的 5 个文件**，并不是完整的 Wheel-Legged-Gym 仓库。其余代码（rsl_rl、base env、robot URDF 等）都来自上游 clearlab-sustech/Wheel-Legged-Gym，按以上步骤覆盖即可运行。
-
-#### 开始训练
-
-```bash
 cd wlr_ws/Wheel-Legged-Gym
+pip install -e .
 
-# 训练残差 RL 版本（LQR + PPO）
+# 训练残差 RL 版本（LQR + PPO）—— 本项目核心
 python wheel_legged_gym/scripts/train.py --task=wheel_legged_residual_flat --headless
 
-# 如果需要对比原版 PPO（纯 RL，无 LQR）
+# 训练原版 PPO（纯 RL，无 LQR）—— 用于对比
 python wheel_legged_gym/scripts/train.py --task=wheel_legged_vmc_flat --headless
 
 # 查看训练曲线
@@ -251,10 +218,10 @@ tensorboard --logdir=./ --port=8080
 | 1000 – 1500 | 能基本走起来 |
 | 1500 – 2000 | 比较好的效果 |
 
-#### 查看训练结果
+#### 回放训练结果
 
 ```bash
-# 回放训练好的策略（替换 LOG_DIR 为实际日志目录）
+# 替换 LOG_DIR 为实际日志目录名
 python wheel_legged_gym/scripts/play.py --task=wheel_legged_residual_flat --load_run=LOG_DIR
 ```
 

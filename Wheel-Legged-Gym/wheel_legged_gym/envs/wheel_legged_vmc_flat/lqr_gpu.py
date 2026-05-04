@@ -18,10 +18,9 @@ Physics background:
     Tp_leg  = leg lean torque baseline
 
   LQR: output = K(L0) @ state_err
-  K is a 2×6 gain matrix, each element a cubic polynomial in L0.
+  K is a 2x6 gain matrix, each element a cubic polynomial in L0.
 """
 
-import math
 import torch
 from torch import Tensor
 
@@ -95,12 +94,12 @@ def compute_lqr_output(
     base_ang_vel: Tensor,      # (N, 3)  angular velocity in body frame [rad/s]
     target_speed: Tensor,      # (N,)    commanded longitudinal speed [m/s]
     wheel_pos_ref: Tensor,     # (N,)    wheel position reference (reset each episode)
-) -> tuple[Tensor, Tensor, Tensor]:
+) -> tuple:
     """
     Compute LQR state vector and raw baseline output torques.
 
-    The LQR gain polynomial was fitted for the 5-bar linkage.  Here we
-    use the clearlab serial-chain theta0/L0 which are geometrically
+    The LQR gain polynomial was fitted for the 5-bar linkage geometry.
+    Here we use the clearlab serial-chain theta0/L0 which are geometrically
     equivalent (virtual leg angle/length from the same origin), so the
     gains transfer directly.
 
@@ -117,7 +116,7 @@ def compute_lqr_output(
 
     # ---- Body pitch from projected gravity -----------------------------------
     # projected_gravity = R_body^T * [0, 0, -1]
-    # When pitched forward by α: pg ≈ [sin(α), 0, -cos(α)]
+    # When pitched forward by alpha: pg approx [sin(alpha), 0, -cos(alpha)]
     body_pitch  = torch.atan2(projected_gravity[:, 0], -projected_gravity[:, 2])
     body_dpitch = base_ang_vel[:, 1]   # y-axis = pitch axis
 
@@ -139,7 +138,7 @@ def compute_lqr_output(
     phi  = -body_pitch
     dPhi = -body_dpitch
 
-    # Clamp position error to ±0.3 m (same as firmware)
+    # Clamp position error to +/-0.3 m (same as firmware)
     x_err  = torch.clamp(x, -0.3, 0.3)
     dx_err = target_speed - dx
 
@@ -147,6 +146,6 @@ def compute_lqr_output(
 
     # ---- Gain-scheduled K and LQR output -------------------------------------
     K = lqr_k_gpu(avg_L0)                                      # (N, 2, 6)
-    lqr_out = torch.bmm(K, lqr_state.unsqueeze(-1)).squeeze(-1) # (N, 2)
+    lqr_out = torch.bmm(K, lqr_state.unsqueeze(-1)).squeeze(-1)  # (N, 2)
 
     return lqr_state, avg_L0, lqr_out
