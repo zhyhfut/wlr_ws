@@ -25,6 +25,7 @@ but work on serial-chain URDF because the virtual-leg abstraction
 
 import torch
 from torch import Tensor
+from typing import Tuple
 
 # Wheel radius [m] — MUST match the URDF collision cylinder radius
 WHEEL_R = 0.0675
@@ -92,7 +93,7 @@ def compute_lqr_output(
     base_ang_vel: Tensor,      # (N, 3)  angular velocity in body frame [rad/s]
     target_speed: Tensor,      # (N,)    commanded longitudinal speed [m/s]
     wheel_pos_ref: Tensor,     # (N,)    wheel position reference
-) -> tuple[Tensor, Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     """
     Compute LQR state vector and raw baseline output torques.
 
