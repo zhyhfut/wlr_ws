@@ -194,7 +194,7 @@ class TaskRegistry:
                 train_cfg.runner.experiment_name,
             )
             if not os.path.exists(log_root):
-                os.mkdir(log_root)
+                os.makedirs(log_root, exist_ok=True)
             self.log_dir = os.path.join(
                 log_root,
                 datetime.now().strftime("%b%d_%H-%M-%S")
