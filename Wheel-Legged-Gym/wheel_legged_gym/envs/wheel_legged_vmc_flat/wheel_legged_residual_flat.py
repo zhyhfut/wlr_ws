@@ -222,10 +222,18 @@ class LeggedRobotResidual(LeggedRobotVMC):
 
         # Terrain height samples under and around the robot
         if self.cfg.terrain.measure_heights:
-            # Relative height: how far below (or above) the base is the ground
-            rel_heights = (
-                self.root_states[:, 2].unsqueeze(1) - self.measured_heights
-            ).clamp(-0.2, 0.2) * obs_scales.height_measurements
+            if torch.is_tensor(self.measured_heights):
+                # Relative height: how far below (or above) the base is the ground
+                rel_heights = (
+                    self.root_states[:, 2].unsqueeze(1) - self.measured_heights
+                ).clamp(-0.2, 0.2) * obs_scales.height_measurements
+            else:
+                # measured_heights not populated yet (e.g. during first reset),
+                # use zeros of correct shape
+                rel_heights = torch.zeros(
+                    self.num_envs, self.num_height_points,
+                    device=self.device, dtype=torch.float,
+                )
             obs = torch.cat([proprio, rel_heights], dim=-1)
         else:
             obs = proprio
