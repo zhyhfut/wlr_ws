@@ -34,6 +34,7 @@ class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
         num_privileged_obs = None  # disable asymmetric critic
 
     class commands(WheelLeggedVMCFlatCfg.commands):
+        curriculum = False  # disable adaptive command range, use fixed [0, 2.5]
         class ranges(WheelLeggedVMCFlatCfg.commands.ranges):
             lin_vel_x = [0.0, 2.5]    # extended range for high-speed training
             ang_vel_yaw = [-6.28, 6.28]  # wider yaw range
