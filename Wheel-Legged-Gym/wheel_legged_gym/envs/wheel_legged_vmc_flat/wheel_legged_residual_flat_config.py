@@ -70,7 +70,7 @@ class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
             height_measurements = 5.0
 
     class rewards(WheelLeggedVMCFlatCfg.rewards):
-        tracking_sigma = 0.5  # wider tracking bandwidth
+        tracking_sigma = 1.0  # wide bandwidth for high-speed gradient at errors up to 2.3 m/s
         class scales(WheelLeggedVMCFlatCfg.rewards.scales):
             # Remove nominal_state — legs need different angles on rough terrain
             nominal_state = 0.0
