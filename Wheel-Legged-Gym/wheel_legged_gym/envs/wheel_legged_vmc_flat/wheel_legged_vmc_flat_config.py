@@ -43,7 +43,7 @@ class WheelLeggedVMCFlatCfg(WheelLeggedVMCCfg):
         max_init_terrain_level = 2
         num_rows = 10
         num_cols = 4
-        terrain_proportions = [0.4, 0.3, 0.2, 0.1]  # flat, smooth slope, rough slope, obstacles
+        terrain_proportions = [0.4, 0.7, 0.9, 0.95, 0.95, 0.95, 0.95, 0.95]  # cumulative: flat, smooth, rough, stairs, disc, stones, gap, pit
 
 
 class WheelLeggedVMCFlatCfgPPO(WheelLeggedVMCCfgPPO):

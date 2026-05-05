@@ -33,6 +33,11 @@ class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
         num_actions      = 4    # [d_theta0_L, d_l0_L, d_theta0_R, d_l0_R]
         num_privileged_obs = None  # disable asymmetric critic
 
+    class commands(WheelLeggedVMCFlatCfg.commands):
+        class ranges(WheelLeggedVMCFlatCfg.commands.ranges):
+            lin_vel_x = [0.0, 2.5]    # extended range for high-speed training
+            ang_vel_yaw = [-6.28, 6.28]  # wider yaw range
+
     class control(WheelLeggedVMCFlatCfg.control):
         # ---------- Residual RL action scaling ---------------------------------
         # RL residual shifts the PD target in VMC task space.
@@ -64,11 +69,15 @@ class WheelLeggedResidualFlatCfg(WheelLeggedVMCFlatCfg):
             height_measurements = 5.0
 
     class rewards(WheelLeggedVMCFlatCfg.rewards):
+        tracking_sigma = 0.5  # wider tracking bandwidth
         class scales(WheelLeggedVMCFlatCfg.rewards.scales):
             # Remove nominal_state — legs need different angles on rough terrain
             nominal_state = 0.0
             # Height penalty: robot should maintain target base height
             base_height = -5.0
+            # Rebalance: stronger tracking, relaxed orientation
+            tracking_lin_vel = 3.0   # increased from 1.0
+            orientation = -5.0       # reduced from -10.0
 
     class noise(WheelLeggedVMCFlatCfg.noise):
         class noise_scales(WheelLeggedVMCFlatCfg.noise.noise_scales):
@@ -92,5 +101,5 @@ class WheelLeggedResidualFlatCfgPPO(WheelLeggedVMCFlatCfgPPO):
 
     class runner(WheelLeggedVMCFlatCfgPPO.runner):
         experiment_name    = "wheel_legged_residual_flat"
-        max_iterations     = 3000
+        max_iterations     = 6000
         policy_class_name  = "ActorCriticSequence"

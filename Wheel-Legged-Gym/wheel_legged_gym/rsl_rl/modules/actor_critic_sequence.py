@@ -104,6 +104,7 @@ class ActorCriticSequence(nn.Module):
                 if self.orthogonal_init:
                     torch.nn.init.orthogonal_(actor_layers[-1].weight, 0.01)
                     torch.nn.init.constant_(actor_layers[-1].bias, 0.0)
+                actor_layers.append(nn.Tanh())
             else:
                 actor_layers.append(
                     nn.Linear(actor_hidden_dims[l], actor_hidden_dims[l + 1])
