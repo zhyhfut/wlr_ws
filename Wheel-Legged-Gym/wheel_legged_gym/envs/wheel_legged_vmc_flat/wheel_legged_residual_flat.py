@@ -124,10 +124,10 @@ class LeggedRobotResidual(LeggedRobotVMC):
         """
         cfg = self.cfg.control
         rs = self.residual_scale  # (num_envs,)
+        target_speed = self.commands[:, 0]  # (num_envs,)
 
         # ---- Build VMC references from RL residuals --------------------------
         # theta0_ref: baseline is 0 (stand upright), RL adds per-leg shift
-        # (num_envs, 2)  [left, right]
         theta0_ref = torch.stack(
             [
                 rs * actions[:, 0] * cfg.action_scale_theta,   # left leg
@@ -159,16 +159,19 @@ class LeggedRobotResidual(LeggedRobotVMC):
         )  # (num_envs, 2)
 
         # ---- Wheel torque: track command speed (no RL residual) --------------
-        target_speed = self.commands[:, 0]  # (num_envs,)
         yaw_command  = self.commands[:, 1]  # (num_envs,)
 
+        # Convert base velocity commands (m/s) to wheel angular velocity (rad/s).
+        # wheel_radius = 0.0675 m, track_half = 0.25 m (from URDF).
+        wheel_radius = 0.0675
+        track_half   = 0.25
         wheel_vel_target = torch.stack(
             [
-                target_speed + yaw_command,   # left wheel
-                target_speed - yaw_command,   # right wheel
+                (target_speed + yaw_command * track_half) / wheel_radius,
+                (target_speed - yaw_command * track_half) / wheel_radius,
             ],
             dim=-1,
-        )  # (num_envs, 2)
+        )  # (num_envs, 2) — now in rad/s
 
         torque_wheel = self.d_gains[:, [2, 5]] * (
             wheel_vel_target - self.dof_vel[:, [2, 5]]

@@ -1,3 +1,6 @@
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
 # SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
@@ -821,7 +824,7 @@ class LeggedRobot(BaseTask):
             # self.advanced_terrain_idx
             mask = (
                 self.episode_sums["tracking_lin_vel"][self.success_ids]
-                / self.max_episode_length
+                / self.max_episode_length_s
                 > self.cfg.commands.curriculum_threshold
                 * self.reward_scales["tracking_lin_vel"]
             )
@@ -848,11 +851,11 @@ class LeggedRobot(BaseTask):
         if self.cfg.terrain.curriculum == False:
             if (
                 torch.mean(self.episode_sums["tracking_lin_vel"][env_ids])
-                / self.max_episode_length
+                / self.max_episode_length_s
                 > self.cfg.commands.curriculum_threshold
                 * self.reward_scales["tracking_lin_vel"]
                 and torch.mean(self.episode_sums["tracking_ang_vel"][env_ids])
-                / self.max_episode_length
+                / self.max_episode_length_s
                 > self.cfg.commands.curriculum_threshold
                 * self.reward_scales["tracking_ang_vel"]
                 * 0.8
@@ -1755,6 +1758,10 @@ class LeggedRobot(BaseTask):
         # Tracking of linear velocity commands (x axes)
         lin_vel_error = torch.square(self.commands[:, 0] - self.base_lin_vel[:, 0])
         return torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma / 10) - 1
+
+    def _reward_forward_speed(self):
+        # Direct linear reward for forward speed — constant gradient
+        return self.base_lin_vel[:, 0]
 
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
